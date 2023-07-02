@@ -3,9 +3,14 @@
 from ibapicommon import *
 import threading
 import time
+import datetime
 import json
 import os
 from ibapi.contract import Contract, ContractDetails
+
+def stamp():
+	day = datetime.date.fromtimestamp(time.time())
+	return day.__str__()
 
 def cache_result(fname, original_callback, callback_args=None, callback_kwargs={}):
 		if os.path.exists(fname):
@@ -19,41 +24,32 @@ def cache_result(fname, original_callback, callback_args=None, callback_kwargs={
 				json.dump(data, f, indent=3)
 			return data
 
+class app_context():
+	def __init__(self):
+		self.app = IB()
+		self.app.connectPortal()
+		self.api_thread = threading.Thread(target=run_loop, args=(self.app,), daemon=True)
+		self.api_thread.start()
+	def __enter__(self):
+		return self.app
+
+	def __exit__(self, exc_type, exc_value, exc_tb):
+		# cleanup
+		print("STOPPING THE APP NOW")
+		self.app.disconnect()
 def main():
-	app = IB()
-	app.connectPortal()
-	print(app.isConnected())
-	api_thread = threading.Thread(target=run_loop, args=(app,), daemon=True)
-	api_thread.start()
-	current_symbol = 'META'
-	print("Last Price of symbol")
-	price = app.last_price(current_symbol)
-	print("    $ {}".format(price))
-	# full_chain_args = ('TSLA',)
-	# full_chain_callback = app.full_options_chain
-	# full_chain = cache_result('TSLA_full_chain.json', full_chain_callback, full_chain_args)
-	# opt = app.options_contract_details(267.5, '20230623', 'CALL', 'META')
-	# opt2 = cache_result('test_file', app.options_contract_details, (290.0, '20230630', 'CALL', current_symbol,), {})
-	# print(json.dumps(opt2, indent=3))
-	daily_bars = cache_result('daily_data', app.daily_data, ('SPY',), {'ndays':400})
-	daily_bars2 = cache_result('daily_data2', app.daily_data, ('META',), {'ndays':400})
-	# print(json.dumps(daily_bars, indent=3))
-	# pseries = [x['close'] for x in daily_bars]
-	# print("VOLATILITY: {}".format(volatility(pseries)))
-	# v100 = volatility_schedule(pseries)
-	# print(json.dumps(v100, indent=3))
-	# probs = option_probabilities(288.73, 285, .3658, 5)
-	# print("PROBABILITIES:")
-	# print(json.dumps(probs, indent=3))
-	print("CORRELATION: ")
-	pseries_a = [x['close'] for x in daily_bars]
-	pseries_b = [x['close'] for x in daily_bars2]
-	corr = correlation_b(pseries_a, pseries_b)
-	print("{}".format(corr))
-	# print("100 DAY VOLS: {}".format(v100))
-	# print(len(v100))
-	# print("avg 100 day: {}".format(sum(v100)/len(v100)))
-	app.disconnect()
+	with app_context() as app:
+		print("CONNECTION STATUS: {}".format(app.isConnected()))
+		vix_details = app.details('VIX', security_type='IND')
+		vix_data = cache_result('vix_daily_bars-{}'.format(stamp()), app.daily_data, ('VIX',), {'ndays':400, 'contract':vix_details[0]})
+		META_data = cache_result('SNOW_daily_bars-{}'.format(stamp()), app.daily_data, ('SNOW',), {'ndays':400})
+		# META_data = app.daily_data('META', ndays=400)
+		# vix_data = app.daily_data('VIX', ndays=400, security_type='IND')
+		vix_series = [x['close'] for x in vix_data]
+		meta_series = [x['close'] for x in META_data]
+		print('VIX | META CORRELATION: {}'.format(correlation(vix_series, meta_series)))
+		print("CORRELATION SHEDULE: ")
+		print(json.dumps(correlation_schedule(vix_series, meta_series), indent=3))
 
 if __name__ == '__main__':
 	main()

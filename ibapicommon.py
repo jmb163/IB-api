@@ -90,9 +90,9 @@ class IB(EClient, EWrapper):
 	def currentTime(self, time):
 		print("The current time is: {}".format(time))
 
-	def contractSymbol(self, symbol):
+	def contractSymbol(self, symbol, security_type='STK'):
 		contract = Contract()
-		contract.secType = "STK"
+		contract.secType = security_type
 		contract.symbol = symbol
 		return contract
 
@@ -113,9 +113,9 @@ class IB(EClient, EWrapper):
 		self._notify_completion(req_id)
 		return
 
-	def details(self, symbol):
+	def details(self, symbol, security_type='STK'):
 		req_id = self.get_req_id()
-		self.reqContractDetails(req_id, self.contractSymbol(symbol))
+		self.reqContractDetails(req_id, self.contractSymbol(symbol, security_type=security_type))
 		results = self._wait_completion(req_id)
 		return results
 
@@ -166,8 +166,8 @@ class IB(EClient, EWrapper):
 		self._notify_completion(reqId)
 		return
 
-	def last_price(self, symbol):
-		contract_symbol = self.contractSymbol(symbol)
+	def last_price(self, symbol, security_type='STK'):
+		contract_symbol = self.contractSymbol(symbol, security_type=security_type)
 		contract_symbol.exchange = 'SMART'
 		contract_symbol.currency = 'USD'
 		end_date_time = "" #blank string means, most recent date
@@ -285,6 +285,15 @@ class IB(EClient, EWrapper):
 		exchanges = [x.exchange for x in contracts]
 		return list(set(exchanges))
 	def options_contract_details(self, strike, expiration, option_type, symbol, exchanges=None):
+		'''
+		Request the greeks and price for a single option contract
+		:param strike:
+		:param expiration:
+		:param option_type:
+		:param symbol:
+		:param exchanges:
+		:return:
+		'''
 		contract_symbol = self.contractSymbol(symbol)
 		contract_symbol.secType = "OPT"
 		contract_symbol.currency = "USD"
@@ -317,7 +326,7 @@ class IB(EClient, EWrapper):
 				'280.0':{
 					'put':options_contract_details(280, '20230621', 'PUT', symbol),
 					'call':options_contract_detail(280, '20230621', 'CALL', symbol)
-				}
+				}git push --set-upstream origin master
 				...
 			}
 			...
@@ -352,7 +361,7 @@ class IB(EClient, EWrapper):
 					print(json.dumps(chain['expirations'][cycle][str(float(strike))], indent=3))
 		return chain
 
-	def daily_data(self, symbol, ndays=100, tick='C'):
+	def daily_data(self, symbol, ndays=100, security_type='STK', contract=None):
 		'''
 		Get the daily ticks for a given stock. This will be used to calculate the nth day
 		historical volatility, or if more data is requested than the nth day volatility then
@@ -364,9 +373,12 @@ class IB(EClient, EWrapper):
 		:param ndays:  The number of days to reach back
 		:return:       An array of tick data, could be OHLC or just C
 		'''
-		contract_symbol = self.contractSymbol(symbol)
-		contract_symbol.exchange = 'SMART'
-		contract_symbol.currency = 'USD'
+		if contract is None:
+			contract_symbol = self.contractSymbol(symbol, security_type=security_type)
+			contract_symbol.exchange = 'SMART'
+			contract_symbol.currency = 'USD'
+		else:
+			contract_symbol = contract
 		end_date_time = ""  # blank string means, most recent date
 		if ndays > 365:
 			duration_string = "{} Y".format((ndays // 365) + 1)
@@ -385,8 +397,9 @@ class IB(EClient, EWrapper):
 			more_details = self.details(symbol)
 			for detail in more_details:
 				req_id = self.get_req_id()
-				contract_symbol.exchange = detail.exchange
-				contract_symbol.primaryExchange = detail.exchange
+				# contract_symbol.exchange = detail.exchange
+				# contract_symbol.primaryExchange = detail.exchange
+				contract_symbol = detail
 				self.reqHistoricalData(req_id, contract_symbol, end_date_time, duration_string,
 								bar_size_setting, what_to_show, use_rth, format_date, keep_up_to_date, [])
 				bars = self._wait_completion(req_id)
@@ -480,6 +493,86 @@ def volatility_schedule(price_series):
 	}
 	return ret
 
+def correlation_schedule(price_series_a, price_serires_b):
+	'''
+	Do a similar analysis to the volatility schedule but with correlations.
+	This is most useful for checking how an instruments correlation with another
+	may vary from time to time. For instance, a stock probably will have a negative
+	correlation to the VIX, but for the sake of being thorough, that should be
+	checked to see if there's drift, or the median correlation over a select number
+	of time windows is not what might be expected
+
+	It is assumed that price_series_a and price_series_b are of the same length and
+	are matching in time
+	:param price_series_a:
+	:param price_serires_b:
+	:return:
+	'''
+	series_len = len(price_series_a)
+	def window(sa, sb, size):
+		corrs = []
+		start = 0
+		finish = size
+		while finish < series_len:
+			corrs.append(correlation(sa[start:finish], sb[start:finish]))
+			start += 1
+			finish += 1
+		return corrs
+
+	def scale(corr_series):
+		'''
+		vol series need to be sorted
+		:param vol_series:
+		:return:
+		'''
+		p_keys = list(range(0, 105, 5))
+		vol_series_len = len(corr_series)
+		ret = {}
+		ret[str(p_keys[0])] = corr_series[0]
+		print(vol_series_len)
+		for i in range(1, 20):
+			ind = int((p_keys[i]/100) * vol_series_len)
+			ret[str(p_keys[i])] = corr_series[ind]
+		ret[str(p_keys[-1])] = corr_series[-1]
+		return ret
+
+	corrs_100 = window(price_series_a, price_serires_b, 100)
+	corrs_50 = window(price_series_a, price_serires_b, 50)
+	corrs_20 = window(price_series_a, price_serires_b, 20)
+	corrs_10 = window(price_series_a, price_serires_b, 10)
+	corrs_100_len = len(corrs_100)
+	corrs_50_len = len(corrs_50)
+	corrs_20_len = len(corrs_20)
+	corrs_10_len = len(corrs_10)
+	corrs_100_sorted = sorted(corrs_100)
+	corrs_50_sorted = sorted(corrs_50)
+	corrs_20_sorted = sorted(corrs_20)
+	corrs_10_sorted = sorted(corrs_10)
+	front_100 = corrs_100[-1]
+	front_50 = corrs_50[-1]
+	front_20 = corrs_20[-1]
+	front_10 = corrs_10[-1]
+	corrs_100_front_percentile = corrs_100_sorted.index(front_100) / corrs_100_len
+	corrs_50_front_percentile = corrs_50_sorted.index(front_50) / corrs_50_len
+	corrs_20_front_percentile = corrs_20_sorted.index(front_20) / corrs_20_len
+	corrs_10_front_percentile = corrs_10_sorted.index(front_10) / corrs_10_len
+	ret = {
+		'100_day_percentile': corrs_100_front_percentile,
+		'50_day_percentile': corrs_50_front_percentile,
+		'20_day_percentile': corrs_20_front_percentile,
+		'10_day_percentile': corrs_10_front_percentile,
+		'100_day': front_100,
+		'50_day': front_50,
+		'20_day': front_20,
+		'10_day': front_10,
+		'100_day_scale': scale(corrs_100_sorted),
+		'50_day_scale': scale(corrs_50_sorted),
+		'20_day_scale': scale(corrs_20_sorted),
+		'10_day_scale': scale(corrs_10_sorted)
+	}
+	return ret
+
+
 def option_probabilities(current_price, cross_price, volatility, time):
 	'''
 	Calculate the probability of a stock price being above or below some value given
@@ -559,7 +652,7 @@ def option_probabilities(current_price, cross_price, volatility, time):
 	}
 	return ret
 
-def correlation_b(series_a_in, series_b_in):
+def correlation(series_a_in, series_b_in):
 	series_a_len = len(series_a_in)
 	series_b_len = len(series_b_in)
 	series_len = min(series_a_len, series_b_len)
@@ -576,58 +669,6 @@ def correlation_b(series_a_in, series_b_in):
 	series_b = np.array(series_b)
 	coefficient = pearsonr(series_a, series_b)[0]
 	return coefficient
-def correlation(series_a_in, series_b_in):
-	'''
-	Find the correlation between two sets of data, this could be
-	helpful for gauging if something really stays in line with the
-	S&P 500, I could also use it over windows of time to see how correlations
-	change, or work for a number of days before something goes out of wack
-
-	It shall be assumed that series_a and series_b are lists of closing prices
-	with the same length
-	:param series_a:
-	:param series_b:
-	:return:
-	'''
-	series_a_len = len(series_a_in)
-	series_b_len = len(series_b_in)
-	series_len = min(series_a_len, series_b_len)
-	if series_a_len > series_b_len:
-		series_a = series_a_in[(-1 * series_b_len):]
-		series_b = series_b_in
-	elif series_b_len > series_a_len:
-		series_b = series_b_in[(-1 * series_a_len):]
-		series_a = series_a_in
-	else:
-		series_a = series_a_in
-		series_b = series_b_in
-	def percent_change(old, new):
-		return (old - new)/old
-	def in_return_form(series):
-		i = 0
-		returns = []
-		while (i + 1) < series_len:
-			returns.append(percent_change(series[i], series[i+1]))
-			i += 1
-		return returns
-	series_a_returns = in_return_form(series_a)
-	series_b_returns = in_return_form(series_b)
-	print("returns len a: {}".format(len(series_a_returns)))
-	print("returns len b: {}".format(len(series_b_returns)))
-	print('series a len: {}'.format(len(series_a)))
-	print('series b len: {}'.format(len(series_b)))
-	series_a_return_avg = sum(series_a_returns)/(series_len - 1)
-	series_b_return_avg = sum(series_b_returns)/(series_len - 1)
-	series_a_return_diff = [(x - series_a_return_avg) for x in series_a_returns]
-	series_b_return_diff = [(x - series_b_return_avg) for x in series_b_returns]
-	series_products = []
-	for i in range(0, series_len - 1):
-		series_products.append(series_a_return_diff[i] * series_b_return_diff[i])
-	covariance = sum(series_products)/(series_len - 2)
-	sigma_a = volatility(series_a)
-	sigma_b = volatility(series_b)
-	correlation = covariance/(sigma_a * sigma_b)
-	return correlation
 
 class RequestContext(IB):
 	'''
