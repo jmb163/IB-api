@@ -38,13 +38,18 @@ class IB(EClient, EWrapper):
 	def get_req_id(self):
 		self._req_id += 1
 		return self._req_id - 1
-	def _queue_request(self, req_id):
+	def _queue_request(self, req_id, originator=None):
 		# print('RECEIVED REQUEST: #{}'.format(req_id))
-		self.requests[str(req_id)] = {
-			'queue':Queue(),
-			'results':[],
-			'originator':None
-		}
+		if not originator:
+			self.requests[str(req_id)] = {
+				'queue':Queue(),
+				'results':[],
+			}
+		else:
+			self.requests[originator] = {
+				'queue':Queue(),
+				'results':[]
+			}
 		# print('KEYS: {}'.format(self.requests.keys()))
 		return
 
@@ -55,25 +60,49 @@ class IB(EClient, EWrapper):
 			self.requests[str(req_id)]['originator'] = name
 		return
 
-	def _notify_completion(self, req_id):
-		if str(req_id) in self.requests.keys():
+	def _notify_completion(self, req_id, originator=None):
+		if str(req_id) in self.requests.keys() and not originator:
 			self.requests[str(req_id)]['queue'].put_nowait(req_id)
+		else:
+			#originator not None
+			self.requests[originator]['queue'].put_nowait(originator)
 		return
-	def _wait_completion(self, req_id, timeout=None):
-		nqueue = self.requests[str(req_id)]['queue']
-		try:
-			if timeout:
-				nqueue.get(timeout=timeout)
-			else:
-				nqueue.get()
-			result = self.requests[str(req_id)]['results']
-		except Exception as e:
-			if self.requests[str(req_id)]['results']:
-				result = self.requests[str(req_id)]['results'] # return partial or damaged data
-			else:
-				result = None
-		self.requests.pop(str(req_id))
-		return result
+	def _wait_completion(self, req_id, originator=None, timeout=None,
+						 cancel_callback=None, cancel_args=(), cancel_kwargs={}):
+		if originator:
+			nqueue = self.requests[originator]['queue']
+			try:
+				if timeout:
+					nqueue.get(timeout=timeout)
+				else:
+					nqueue.get()
+				result = self.requests[originator]['results']
+			except Exception as e:
+				if self.requests[originator]['results']:
+					result = self.requests[originator]['results']
+				else:
+					return None
+			self.requests.pop(originator)
+			if cancel_callback:
+				cancel_callback(*cancel_args, **cancel_kwargs)
+			return result
+		else:
+			nqueue = self.requests[str(req_id)]['queue']
+			try:
+				if timeout:
+					nqueue.get(timeout=timeout)
+				else:
+					nqueue.get()
+				result = self.requests[str(req_id)]['results']
+			except Exception as e:
+				if self.requests[str(req_id)]['results']:
+					result = self.requests[str(req_id)]['results'] # return partial or damaged data
+				else:
+					result = None
+			self.requests.pop(str(req_id))
+			if cancel_callback:
+				cancel_callback(*cancel_args, **cancel_kwargs)
+			return result
 
 	def error(self, reqId, errorCode, errorString, advancedOrderRejectJson = ""):
 		super().error(reqId, errorCode, errorString, advancedOrderRejectJson)
@@ -414,6 +443,62 @@ class IB(EClient, EWrapper):
 		bars = sorted(bars, key=lambda x: x['time'])
 		return bars
 
+	def reqPositions(self):
+		super().reqPositions()
+		# not actually req id 0, it will key off of the position
+		self._queue_request(0, originator='position')
+		return
+
+	def _contract_to_dict(self, contract):
+		'''
+		this should be enough information to work backwards from
+		:param contract:
+		:return:
+		'''
+		ret = {
+			'security_type': contract.secType,
+			'exchange': contract.exchange,
+			'currency': contract.currency,
+			'multiplier': contract.multiplier,
+			'symbol': contract.symbol,
+			'id': contract.conId
+		}
+		return ret
+	def position(self, account, contract, position,
+                 avgCost):
+		super().position(account, contract, position, avgCost)
+		ret = {
+			'account':account,
+			'contract':self._contract_to_dict(contract),
+			'position':position,
+			'average_cost':avgCost
+		}
+		originator = 'position'
+		self.requests[originator]['results'].append(ret)
+		return
+
+	def positionEnd(self):
+		super().positionEnd()
+		originator = 'position'
+		self._notify_completion(0, originator=originator)
+
+	def details(self, symbol, security_type='STK'):
+		req_id = self.get_req_id()
+		self.reqContractDetails(req_id, self.contractSymbol(symbol, security_type=security_type))
+		results = self._wait_completion(req_id, )
+		return results
+	def positions(self):
+		'''
+		Get the current account's positions
+		this is the first part of the machinery for
+		automatic hedging
+		:return: [Position, ...]
+		'''
+		self.reqPositions()
+		originator = 'position'
+		#give a time out so we don't stay subscribed to positions forever
+		results = self._wait_completion(0, originator=originator, timeout=2, cancel_callback=self.cancelPositions())
+		return results
 
 def volatility(price_series, annualized=False):
 	mean = sum(price_series)/len(price_series)
@@ -529,7 +614,6 @@ def correlation_schedule(price_series_a, price_serires_b):
 		vol_series_len = len(corr_series)
 		ret = {}
 		ret[str(p_keys[0])] = corr_series[0]
-		print(vol_series_len)
 		for i in range(1, 20):
 			ind = int((p_keys[i]/100) * vol_series_len)
 			ret[str(p_keys[i])] = corr_series[ind]
@@ -544,10 +628,10 @@ def correlation_schedule(price_series_a, price_serires_b):
 	corrs_50_len = len(corrs_50)
 	corrs_20_len = len(corrs_20)
 	corrs_10_len = len(corrs_10)
-	corrs_100_sorted = sorted(corrs_100)
-	corrs_50_sorted = sorted(corrs_50)
-	corrs_20_sorted = sorted(corrs_20)
-	corrs_10_sorted = sorted(corrs_10)
+	corrs_100_sorted = sorted(corrs_100, reverse=True)
+	corrs_50_sorted = sorted(corrs_50, reverse=True)
+	corrs_20_sorted = sorted(corrs_20, reverse=True)
+	corrs_10_sorted = sorted(corrs_10, reverse=True)
 	front_100 = corrs_100[-1]
 	front_50 = corrs_50[-1]
 	front_20 = corrs_20[-1]
