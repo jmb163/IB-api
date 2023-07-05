@@ -482,11 +482,6 @@ class IB(EClient, EWrapper):
 		originator = 'position'
 		self._notify_completion(0, originator=originator)
 
-	def details(self, symbol, security_type='STK'):
-		req_id = self.get_req_id()
-		self.reqContractDetails(req_id, self.contractSymbol(symbol, security_type=security_type))
-		results = self._wait_completion(req_id, )
-		return results
 	def positions(self):
 		'''
 		Get the current account's positions
@@ -497,7 +492,7 @@ class IB(EClient, EWrapper):
 		self.reqPositions()
 		originator = 'position'
 		#give a time out so we don't stay subscribed to positions forever
-		results = self._wait_completion(0, originator=originator, timeout=2, cancel_callback=self.cancelPositions())
+		results = self._wait_completion(0, originator=originator, timeout=2, cancel_callback=self.cancelPositions)
 		return results
 
 def volatility(price_series, annualized=False):
