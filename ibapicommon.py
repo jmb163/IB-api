@@ -29,8 +29,8 @@ def cache_result(fname, original_callback, callback_args):
 class IB(EClient, EWrapper):
 	def __init__(self):
 		EClient.__init__(self, self)
-		self.port = 7496
-		self.client_id = random.randint(1,255)
+		self.port = 7497
+		self.client_id = random.randint(0, 255)
 		self._req_id = 0
 		self.best_exchange = 'IBUSOPT'
 		self.requests = {}
@@ -108,15 +108,15 @@ class IB(EClient, EWrapper):
 		super().error(reqId, errorCode, errorString, advancedOrderRejectJson)
 		# print("ERROR!!! {}".format(errorString))
 		if int(errorCode) == 504:
-			self.connectPortal()
+			self.connect_portal()
 		if str(reqId) in self.requests.keys():
 			self.requests[str(reqId)]['queue'].put_nowait(reqId)
 		return
 
-	def connectPortal(self):
+	def connect_portal(self):
 		self.connect('127.0.0.1', self.port, self.client_id)
 
-	def currentTime(self, time):
+	def current_time(self, time):
 		print("The current time is: {}".format(time))
 
 	def contractSymbol(self, symbol, security_type='STK'):
@@ -470,7 +470,7 @@ class IB(EClient, EWrapper):
 		ret = {
 			'account':account,
 			'contract':self._contract_to_dict(contract),
-			'position':position,
+			'position':int(str(position)),
 			'average_cost':avgCost
 		}
 		originator = 'position'

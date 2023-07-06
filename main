@@ -27,7 +27,7 @@ def cache_result(fname, original_callback, callback_args=None, callback_kwargs={
 class app_context():
 	def __init__(self):
 		self.app = IB()
-		self.app.connectPortal()
+		self.app.connect_portal()
 		self.api_thread = threading.Thread(target=run_loop, args=(self.app,), daemon=True)
 		self.api_thread.start()
 	def __enter__(self):
@@ -56,6 +56,9 @@ def main():
 		print(json.dumps(correlation_schedule(vix_series, meta_series), indent=3))
 		print("VVIX CORRELATION SCHEDULE: ")
 		print(json.dumps(correlation_schedule(vvix_series, meta_series), indent=3))
+
+		positions = app.positions()
+		print(json.dumps(positions, indent=3))
 
 if __name__ == '__main__':
 	main()
