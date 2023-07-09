@@ -495,13 +495,31 @@ class IB(EClient, EWrapper):
 		results = self._wait_completion(0, originator=originator, timeout=2, cancel_callback=self.cancelPositions)
 		return results
 
-def volatility(price_series, annualized=False):
-	mean = sum(price_series)/len(price_series)
-	variance = sum([(x - mean)**2 for x in price_series])/(len(price_series) - 1)
-	vol = math.sqrt(variance)
-	if annualized:
-		vol = math.sqrt(256) * vol
+# def volatility(price_series, annualized=False, length=None):
+# 	if not length:
+# 		length = len(price_series)
+# 	pdiffs = []
+# 	for i in range(1, length):
+# 		pdiffs.append(math.log(price_series[i]/price_series[i - 1]))
+# 	mean = sum(pdiffs)/(length - 1)
+# 	variance = sum([(x - mean)**2 for x in pdiffs])/(length - 1)
+# 	vol = math.sqrt(variance)
+# 	if annualized:
+# 		vol = math.sqrt(256) * vol
+# 	return vol
+
+def volatility(price_series, annualized=False, length=None):
+	if not length:
+		length = len(price_series)
+	nl_diffs = []
+	for i in range(1, length):
+		nl_diffs.append(math.log(price_series[i]/price_series[i-1]))
+	nl_arr = np.array(nl_diffs)
+	variance = float(np.var(nl_arr))
+	vol = math.sqrt(variance) * math.sqrt(260) * math.sqrt(length/260) * 100
 	return vol
+
+
 
 def volatility_schedule(price_series):
 	'''
@@ -516,7 +534,7 @@ def volatility_schedule(price_series):
 		start = 0
 		finish = size
 		while finish < series_len:
-			vols.append(volatility(series[start:finish], annualized=False))
+			vols.append(volatility(series[start:finish], length=size))
 			start += 1
 			finish += 1
 		return vols
@@ -530,7 +548,7 @@ def volatility_schedule(price_series):
 		vol_series_len = len(vol_series)
 		ret = {}
 		ret[str(p_keys[0])] = vol_series[0]
-		print(vol_series_len)
+		# print(vol_series_len)
 		for i in range(1, 20):
 			ind = int((p_keys[i]/100) * vol_series_len)
 			ret[str(p_keys[i])] = vol_series[ind]
@@ -541,6 +559,7 @@ def volatility_schedule(price_series):
 	vols_50 = window(price_series, 50)
 	vols_20 = window(price_series, 20)
 	vols_10 = window(price_series, 10)
+	print("GOT PAST WINDOW")
 	vols_100_len = len(vols_100)
 	vols_50_len = len(vols_50)
 	vols_20_len = len(vols_20)
@@ -748,6 +767,41 @@ def correlation(series_a_in, series_b_in):
 	series_b = np.array(series_b)
 	coefficient = pearsonr(series_a, series_b)[0]
 	return coefficient
+
+def hedge_ratio(v1, v2, p1, p2, u1, u2, d1, d2, m1, m2):
+	'''
+	Examples:
+	* /ES future
+	-v 30 (historical volatility, maybe median over some windows)
+	-p 4330 price
+	-u (for futures, set unit as multiplier, i.e. the value of 1 point)
+	-d 1 (1 contract is 1 delta)
+	* SPY (STOCK ETF)
+	-v 30
+	-p 430.30
+	-u 1
+	-d 0.1
+
+	30 * 4330.0 * 1 * 1 * 50
+	----------------------------- = 500
+	30 * 433.00 * 1 * 0.01 * 100
+	(this means that if the volatility is the same, it takes 1000 SPY to hedge
+	one ES future, obviously this isn't great in terms of maintenance margin so maybe
+	consider using /MES futures or some options on /ES with an offsetting delta.)
+
+	Figure out the hedge ratio for two different underlyings
+	:param v1: volatility of underlying 1
+	:param v2: volatility of underlying 2
+	:param p1: price of underlying 1
+	:param p2: price of underlying 2
+	:param u1: trading unit of underlying 1
+	:param u2: trading unit of underlying 2
+	:param d1: delta of underlying 1
+	:param d2: delta of underlying 2
+	:return:
+	'''
+	return (v1 * p1 * u1 * d1 * m1)/(v2 * p2 * u2 * d2 * m2)
+
 
 class RequestContext(IB):
 	'''

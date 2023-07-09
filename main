@@ -24,6 +24,10 @@ def cache_result(fname, original_callback, callback_args=None, callback_kwargs={
 				json.dump(data, f, indent=3)
 			return data
 
+def save(data, fname):
+	with open(fname, 'w') as fh:
+		json.dump(data, fh, indent=3)
+
 class app_context():
 	def __init__(self):
 		self.app = IB()
@@ -40,25 +44,9 @@ class app_context():
 def main():
 	with app_context() as app:
 		print("CONNECTION STATUS: {}".format(app.isConnected()))
-		vix_details = app.details('VIX', security_type='IND')
-		vvix_details = app.details('VVIX', security_type='IND')
-		vix_data = cache_result('vix_daily_bars-{}'.format(stamp()), app.daily_data, ('VIX',), {'ndays':400, 'contract':vix_details[0]})
-		META_data = cache_result('snow_daily_bars-{}'.format(stamp()), app.daily_data, ('SNOW',), {'ndays':400})
-		vvix_data = cache_result('vvix_daily_bars={}'.format(stamp()), app.daily_data, ('VVIX',), {'ndays':400, 'contract':vvix_details[0]})
-		# META_data = app.daily_data('META', ndays=400)
-		# vix_data = app.daily_data('VIX', ndays=400, security_type='IND')
-		vix_series = [x['close'] for x in vix_data]
-		vvix_series = [x['close'] for x in vvix_data]
-		meta_series = [x['close'] for x in META_data]
-		print('VIX | SNOW CORRELATION: {}'.format(correlation(vix_series, meta_series)))
-		print('VVIX | SNOW CORRELATION: {}'.format(correlation(vvix_series, meta_series)))
-		print("VIX CORRELATION SHEDULE: ")
-		print(json.dumps(correlation_schedule(vix_series, meta_series), indent=3))
-		print("VVIX CORRELATION SCHEDULE: ")
-		print(json.dumps(correlation_schedule(vvix_series, meta_series), indent=3))
-
-		positions = app.positions()
-		print(json.dumps(positions, indent=3))
+		mdata = app.daily_data('META', ndays=400, security_type='STK')
+		mdaily = [x['close'] for x in mdata]
+		print(json.dumps(volatility_schedule(mdaily), indent=3))
 
 if __name__ == '__main__':
 	main()
