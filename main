@@ -12,6 +12,9 @@ def stamp():
 	day = datetime.date.fromtimestamp(time.time())
 	return day.__str__()
 
+def time_stamp():
+	return time.strftime("%m-%d-%y-%H-%M-%S", time.gmtime(time.time()))
+
 def cache_result(fname, original_callback, callback_args=None, callback_kwargs={}):
 		if os.path.exists(fname):
 			print('USING CACHED RESULT')
@@ -29,8 +32,8 @@ def save(data, fname):
 		json.dump(data, fh, indent=3)
 
 class app_context():
-	def __init__(self):
-		self.app = IB()
+	def __init__(self, test_client=False):
+		self.app = IB(test_client=test_client)
 		self.app.connect_portal()
 		self.api_thread = threading.Thread(target=run_loop, args=(self.app,), daemon=True)
 		self.api_thread.start()
@@ -41,12 +44,36 @@ class app_context():
 		# cleanup
 		print("STOPPING THE APP NOW")
 		self.app.disconnect()
+
+def closes(d_data):
+	return [x['close'] for x in d_data]
 def main():
-	with app_context() as app:
+	with app_context(test_client=True) as app:
 		print("CONNECTION STATUS: {}".format(app.isConnected()))
-		mdata = app.daily_data('META', ndays=400, security_type='STK')
-		mdaily = [x['close'] for x in mdata]
-		print(json.dumps(volatility_schedule(mdaily), indent=3))
+		print("Positions:")
+		# positions = app.positions()
+		# print(json.dumps(positions, indent=3))
+		# spy_data = app.daily_data("APP", 400)
+		# spy_closes = closes(spy_data)
+		# vs = volatility_schedule(spy_closes)
+		# print(option_probabilities(38.47, 35, vs['100_day'], 7/365))
+		# print(option_probabilities(38.47, 35, vs['50_day'], 7/365))
+		# print(option_probabilities(38.47, 35, vs['20_day'], 7/365))
+		# print(option_probabilities(38.47, 35, vs['10_day'], 7/365))
+		# print(json.dumps(vs, indent=2))
+		print("Put price: {}".format(put_price(537.50, 537.5, .241, 4/365)))
+		print("Call price: {}".format(call_price(537.50, 537.5, .246, 4/365)))
+		print("Monte Carlo")
+		prices = monte_carlo(100, 0.3, 50, 50)
+		last = []
+		print(prices)
+
+		for i in range(0, prices.shape[0]):
+			last.append(prices[i, -1])
+		print("Last price")
+		print(last)
+
+
 
 if __name__ == '__main__':
 	main()

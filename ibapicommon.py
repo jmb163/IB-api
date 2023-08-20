@@ -11,9 +11,11 @@ import time
 import os
 from scipy.stats import norm
 from scipy.stats import pearsonr
+from scipy.sparse import diags
+from scipy.sparse import linalg
 import numpy as np
 
-
+RISK_FREE_RATE = 0.049
 
 def cache_result(fname, original_callback, callback_args):
 	if os.path.exists(fname):
@@ -27,9 +29,11 @@ def cache_result(fname, original_callback, callback_args):
 			json.dump(data, f, indent=3)
 		return data
 class IB(EClient, EWrapper):
-	def __init__(self):
+	def __init__(self, test_client=False):
 		EClient.__init__(self, self)
-		self.port = 7497
+		self.port = 7496
+		if test_client:
+			self.port = 7497
 		self.client_id = random.randint(0, 255)
 		self._req_id = 0
 		self.best_exchange = 'IBUSOPT'
@@ -455,13 +459,25 @@ class IB(EClient, EWrapper):
 		:param contract:
 		:return:
 		'''
+		def combo_legs_to_dict(legs):
+			if not legs:
+				return None
+			combo = []
+			for leg in legs:
+				cm = {
+					'id':leg.conId,
+					'action':leg.action
+				}
+				combo.append(cm)
+			return combo
 		ret = {
 			'security_type': contract.secType,
 			'exchange': contract.exchange,
 			'currency': contract.currency,
 			'multiplier': contract.multiplier,
 			'symbol': contract.symbol,
-			'id': contract.conId
+			'id': contract.conId,
+			'combo': combo_legs_to_dict(contract.comboLegs)
 		}
 		return ret
 	def position(self, account, contract, position,
@@ -789,6 +805,18 @@ def hedge_ratio(v1, v2, p1, p2, u1, u2, d1, d2, m1, m2):
 	one ES future, obviously this isn't great in terms of maintenance margin so maybe
 	consider using /MES futures or some options on /ES with an offsetting delta.)
 
+	Note:
+	Since there are some peculiarities when comparing various types of underlyings, there
+	are a few heuristics to arrive at the correct ratio
+
+	- 1 share of stock is 1 delta
+	- 1 futures contract is 100 delta
+	- The futures multiplier is the value of 1 point (i.e. 1 point in /ES is $50 mult is 50)
+	- For compatibility between futures and stock or other underlyings, consider the multiplier of a
+	  stock position to be 100
+	- Units is the number of share or contracts an option represents (1 for things that aren't options)
+
+
 	Figure out the hedge ratio for two different underlyings
 	:param v1: volatility of underlying 1
 	:param v2: volatility of underlying 2
@@ -798,9 +826,91 @@ def hedge_ratio(v1, v2, p1, p2, u1, u2, d1, d2, m1, m2):
 	:param u2: trading unit of underlying 2
 	:param d1: delta of underlying 1
 	:param d2: delta of underlying 2
+	:param m1: multiplier of underlying 1
+	:param m2: multiplier of underlying 2
 	:return:
 	'''
 	return (v1 * p1 * u1 * d1 * m1)/(v2 * p2 * u2 * d2 * m2)
+
+def d1_calc(stock_price, strike_price, volatility, time, dividend_yield=0):
+	'''
+	:param stock_price:
+	:param strike_price:
+	:param volatility:
+	:param time:
+	:return:
+	'''
+	numerator_p1 = np.log(np.divide(stock_price, strike_price))
+	numerator_p2 = np.multiply(time, (RISK_FREE_RATE - dividend_yield + np.divide(np.square(volatility), 2)))
+	# numerator_p1 = math.log(stock_price / strike_price)
+	# numerator_p2 = time * (RISK_FREE_RATE - dividend_yield + (volatility**2/2))
+	numerator = np.add(numerator_p1, numerator_p2)
+	denominator = np.multiply(volatility, np.sqrt(time))
+	return np.divide(numerator, denominator)
+
+def d2_calc(d1, volatility, time):
+	'''
+	:param d1: the d1 value
+	:param volatility: given volatility of option (historical volatility or implied volatility)
+	:param time: time, given as percentage of year (i.e. days/365)
+	:return:
+	'''
+	return np.subtract(d1, np.multiply(volatility, np.sqrt(time)))
+def put_price(stock_price, strike_price, volatility, time, dividend_yield=0):
+	'''
+	:param stock_price:
+	:param strike_price:
+	:param volatility:
+	:param dividen_yield:
+	:return:
+	'''
+	d1 = d1_calc(stock_price, strike_price, volatility, time, dividend_yield=dividend_yield)
+	d2 = d2_calc(d1, volatility, time)
+	print("d1: {} d2: {} delta: {}".format(d1, d2, norm.cdf(d1)))
+	part1 = np.multiply(np.multiply(np.exp(np.multiply(-RISK_FREE_RATE, time)), norm.cdf(-d2)), strike_price)
+	part2 = np.multiply(np.multiply(np.exp(np.multiply(-dividend_yield, time)), norm.cdf(-d1)), stock_price)
+	# part1 = (strike_price * np.exp(-RISK_FREE_RATE * time) * norm.cdf(-d2))
+	# part2 = (stock_price * np.exp(-dividend_yield * time) * norm.cdf(-d1))
+	return np.subtract(part1, part2)
+
+def call_price(stock_price, strike_price, volatility, time, dividend_yield=0):
+	'''
+	:param stock_price: current stock price
+	:param strike_price: strike price of option in question
+	:param volatility: given volatility of option (historical volatility or implied volatility)
+	:param time: time, given as percentage of the year (i.e. days/365)
+	:return:
+	'''
+	d1 = d1_calc(stock_price, strike_price, volatility, time, dividend_yield=dividend_yield)
+	d2 = d2_calc(d1, volatility, time)
+	print("d1: {} d2: {}".format(d1, d2))
+	part1 = np.multiply(np.multiply(np.exp(np.multiply(-dividend_yield, time)), norm.cdf(d1)), stock_price)
+	part2 = np.multiply(np.multiply(np.exp(np.multiply(-RISK_FREE_RATE, time)), norm.cdf(d2)), strike_price)
+	return np.subtract(part1, part2)
+
+def monte_carlo(start_price, volatility, days, simulations, dt=1, risk_free_rate=0.049, reshape=True):
+	days_in_year = 365 # or 252
+	sigma = np.divide(volatility, np.sqrt(days_in_year))
+	rate = risk_free_rate / days_in_year # pro rata
+	epsilon = np.random.normal( size=((days * simulations) + (simulations - 1)))
+	ds_s = np.add(np.multiply(rate, dt), np.multiply(sigma, np.multiply(np.sqrt(dt), epsilon)))
+	ones = -np.ones((simulations * days) + simulations)
+	ones[0:-1:(days + 1)] = 1
+
+	ds_s[days:((days * simulations) + 1):(days + 1)] = -1
+	d = [ds_s + 1, ones]
+	k = [-1, 0]
+	M = diags(d, k, format='csc')
+	p = np.zeros(((days * simulations) + simulations, 1))
+	p[0:-1:(days + 1)] = start_price
+	s = linalg.spsolve(M, p)
+
+	if reshape:
+		s = np.reshape(s, (simulations, days + 1))
+
+	return s
+
+
 
 
 class RequestContext(IB):
